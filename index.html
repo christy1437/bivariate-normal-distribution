@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>二维正态分布与动态切面</title>
+<style>
+  :root {
+    color-scheme: light;
+    font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #17212b;
+    background: #f4f6f7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+  }
+  h1 { font-size: 22px; margin: 0; font-weight: 650; }
+  .subtitle { color: #697781; font-size: 14px; }
+  .layout {
+    display: grid; grid-template-columns: minmax(0, 1fr) 280px;
+    background: #fff; border: 1px solid #dce2e5; border-radius: 8px;
+    overflow: hidden;
+  }
+  .plot { min-width: 0; padding: 12px; }
+  canvas { display: block; width: 100%; height: min(70vh, 620px); min-height: 390px; }
+  aside { border-left: 1px solid #e3e8ea; padding: 20px; }
+  .control { margin-bottom: 22px; }
+  .label {
+    display: flex; justify-content: space-between; gap: 12px;
+    font-size: 13px; margin-bottom: 9px;
+  }
+  output { color: #167d78; font-variant-numeric: tabular-nums; }
+  input[type="range"] { width: 100%; accent-color: #167d78; }
+  .legend { display: grid; gap: 11px; margin-top: 24px; color: #4f5c64; font-size: 13px; }
+  .key { display: flex; align-items: center; gap: 9px; }
+  .swatch { width: 18px; height: 4px; border-radius: 2px; background: #198b83; }
+  .swatch.slice { background: #ef795b; }
+  .equation {
+    border-top: 1px solid #e3e8ea; margin-top: 24px; padding-top: 18px;
+    color: #53616a; font-size: 13px; line-height: 1.7;
+  }
+  .equation strong { color: #17212b; font-weight: 600; }
+  @media (max-width: 760px) {
+    main { padding: 14px; }
+    .layout { grid-template-columns: 1fr; }
+    aside { border-left: 0; border-top: 1px solid #e3e8ea; }
+    canvas { height: 55vh; min-height: 340px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>二维正态分布 · 动态切面</h1>
+    <div class="subtitle">拖动切面位置，观察条件分布 X | Y = y₀</div>
+  </header>
+  <section class="layout">
+    <div class="plot"><canvas id="plot" aria-label="二维正态分布三维曲面和动态切面"></canvas></div>
+    <aside>
+      <div class="control">
+        <div class="label"><label for="slice">切面位置 y₀</label><output id="sliceOut"></output></div>
+        <input id="slice" type="range" min="-2.8" max="2.8" step="0.01" value="0.8">
+      </div>
+      <div class="control">
+        <div class="label"><label for="rho">相关系数 ρ</label><output id="rhoOut"></output></div>
+        <input id="rho" type="range" min="-0.85" max="0.85" step="0.01" value="0.55">
+      </div>
+      <div class="control">
+        <div class="label"><label for="rotate">视角</label><output id="rotateOut"></output></div>
+        <input id="rotate" type="range" min="25" max="65" step="1" value="43">
+      </div>
+      <div class="legend">
+        <div class="key"><span class="swatch"></span>二维正态密度曲面</div>
+        <div class="key"><span class="swatch slice"></span>切面与曲面的交线</div>
+      </div>
+      <div class="equation">
+        <strong>切面分布</strong><br>
+        X | Y = y₀ ~ N(ρy₀, 1 − ρ²)<br><br>
+        橙色交线是联合密度在 y = y₀ 处的截面；归一化后即为上方的一维条件正态分布。
+      </div>
+    </aside>
+  </section>
+</main>
+<script>
+(() => {
+  const canvas = document.querySelector("#plot");
+  const ctx = canvas.getContext("2d");
+  const sliceInput = document.querySelector("#slice");
+  const rhoInput = document.querySelector("#rho");
+  const rotateInput = document.querySelector("#rotate");
+  const sliceOut = document.querySelector("#sliceOut");
+  const rhoOut = document.querySelector("#rhoOut");
+  const rotateOut = document.querySelector("#rotateOut");
+
+  const density = (x, y, rho) => {
+    const q = (x * x - 2 * rho * x * y + y * y) / (1 - rho * rho);
+    return Math.exp(-q / 2) / (2 * Math.PI * Math.sqrt(1 - rho * rho));
+  };
+
+  function draw() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const W = rect.width, H = rect.height;
+    ctx.clearRect(0, 0, W, H);
+    const rho = Number(rhoInput.value);
+    const y0 = Number(sliceInput.value);
+    const angle = Number(rotateInput.value) * Math.PI / 180;
+    sliceOut.value = y0.toFixed(2);
+    rhoOut.value = rho.toFixed(2);
+    rotateOut.value = `${rotateInput.value}°`;
+
+    const cx = W * 0.50, cy = H * 0.72;
+    const scale = Math.min(W / 9.2, H / 6.5);
+    const zScale = scale * 7.0;
+    const project = (x, y, z) => {
+      const u = x * Math.cos(angle) - y * Math.sin(angle);
+      const v = x * Math.sin(angle) + y * Math.cos(angle);
+      return [cx + u * scale, cy - v * scale * 0.47 - z * zScale];
+    };
+
+    // Draw the ground plane and coordinate axes.
+    ctx.fillStyle = "#f7f9f9";
+    ctx.beginPath();
+    const corners = [[-3,-3,0],[3,-3,0],[3,3,0],[-3,3,0]].map(p => project(...p));
+    corners.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p));
+    ctx.closePath(); ctx.fill();
+
+    ctx.strokeStyle = "#dce3e5"; ctx.lineWidth = 1;
+    for (let t = -3; t <= 3; t++) {
+      let a = project(t, -3, 0), b = project(t, 3, 0);
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+      a = project(-3, t, 0); b = project(3, t, 0);
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+    }
+
+    // Mesh strips are depth sorted to keep the surface readable.
+    const strips = [];
+    const n = 40, step = 6 / n;
+    for (let j = 0; j <= n; j++) {
+      const y = -3 + j * step;
+      const pts = [];
+      for (let i = 0; i <= n; i++) {
+        const x = -3 + i * step;
+        pts.push(project(x, y, density(x, y, rho)));
+      }
+      strips.push({ y, pts });
+    }
+    strips.sort((a, b) =>
+      (a.y * Math.sin(angle)) - (b.y * Math.sin(angle))
+    );
+    for (const strip of strips) {
+      ctx.beginPath();
+      strip.pts.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p));
+      ctx.strokeStyle = "rgba(22, 126, 119, 0.38)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    for (let i = 0; i <= n; i += 4) {
+      const x = -3 + i * step;
+      ctx.beginPath();
+      for (let j = 0; j <= n; j++) {
+        const y = -3 + j * step;
+        const p = project(x, y, density(x, y, rho));
+        j ? ctx.lineTo(...p) : ctx.moveTo(...p);
+      }
+      ctx.strokeStyle = "rgba(22, 126, 119, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // The vertical slice plane, with its intersection curve highlighted.
+    const plane = [[-3,y0,0], [3,y0,0], [3,y0,0.68], [-3,y0,0.68]].map(p => project(...p));
+    ctx.beginPath();
+    plane.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p));
+    ctx.closePath();
+    ctx.fillStyle = "rgba(239, 121, 91, 0.12)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(239, 121, 91, 0.38)";
+    ctx.stroke();
+
+    ctx.beginPath();
+    for (let i = 0; i <= 160; i++) {
+      const x = -3 + 6 * i / 160;
+      const p = project(x, y0, density(x, y0, rho));
+      i ? ctx.lineTo(...p) : ctx.moveTo(...p);
+    }
+    ctx.strokeStyle = "#ef795b"; ctx.lineWidth = 3; ctx.stroke();
+
+    // Axes and labels.
+    const axes = [
+      { end: [3.35, 0, 0], label: "X" },
+      { end: [0, 3.35, 0], label: "Y" },
+      { end: [0, 0, 0.75], label: "密度" }
+    ];
+    ctx.strokeStyle = "#52616a"; ctx.fillStyle = "#33414a";
+    ctx.lineWidth = 1.5; ctx.font = "13px sans-serif";
+    for (const axis of axes) {
+      const a = project(0,0,0), b = project(...axis.end);
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+      ctx.fillText(axis.label, b[0] + 5, b[1] - 4);
+    }
+
+    const tag = project(0, y0, 0);
+    ctx.fillStyle = "#d96548";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(`y₀ = ${y0.toFixed(2)}`, tag[0] + 7, tag[1] + 17);
+  }
+
+  [sliceInput, rhoInput, rotateInput].forEach(el => el.addEventListener("input", draw));
+  new ResizeObserver(draw).observe(canvas);
+  draw();
+})();
+</script>
+</body>
+</html>
